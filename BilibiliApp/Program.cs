@@ -1,18 +1,34 @@
 using BilibiliApp.Components;
+using BilibiliApp.Services;
+
+const string UserAgent =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+    "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36";
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Add services to the container.
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
 
+// Typed HttpClient for the Bilibili service (API calls)
+builder.Services.AddHttpClient<BilibiliService>(client =>
+{
+    client.DefaultRequestHeaders.Add("User-Agent", UserAgent);
+    client.DefaultRequestHeaders.Add("Referer", "https://www.bilibili.com");
+});
+
+// Named HttpClient for proxying audio CDN streams
+builder.Services.AddHttpClient("bilibili-cdn", client =>
+{
+    client.DefaultRequestHeaders.Add("User-Agent", UserAgent);
+    client.DefaultRequestHeaders.Add("Referer", "https://www.bilibili.com");
+});
+
 var app = builder.Build();
 
-// Configure the HTTP request pipeline.
 if (!app.Environment.IsDevelopment())
 {
     app.UseExceptionHandler("/Error", createScopeForErrors: true);
-    // The default HSTS value is 30 days. You may want to change this for production scenarios, see https://aka.ms/aspnetcore-hsts.
     app.UseHsts();
 }
 app.UseStatusCodePagesWithReExecute("/not-found", createScopeForStatusCodePages: true);
@@ -23,5 +39,42 @@ app.UseAntiforgery();
 app.MapStaticAssets();
 app.MapRazorComponents<App>()
     .AddInteractiveServerRenderMode();
+
+// Audio stream proxy — resolves the CDN URL via yt-dlp, then streams it to the browser.
+// Forwarding Range headers allows the HTML5 audio element to seek.
+app.MapGet("/api/audio-stream/{bvid}", async (
+    string bvid,
+    BilibiliService bilibiliService,
+    IHttpClientFactory httpClientFactory,
+    HttpContext ctx) =>
+{
+    var url = await bilibiliService.GetAudioStreamUrlAsync(bvid);
+    if (string.IsNullOrEmpty(url))
+    {
+        ctx.Response.StatusCode = 404;
+        return;
+    }
+
+    using var client = httpClientFactory.CreateClient("bilibili-cdn");
+    using var req = new HttpRequestMessage(HttpMethod.Get, url);
+
+    if (ctx.Request.Headers.TryGetValue("Range", out var rangeVal))
+        req.Headers.TryAddWithoutValidation("Range", rangeVal.ToString());
+
+    using var resp = await client.SendAsync(
+        req, HttpCompletionOption.ResponseHeadersRead, ctx.RequestAborted);
+
+    ctx.Response.StatusCode = (int)resp.StatusCode;
+
+    if (resp.Content.Headers.ContentType is { } ct)
+        ctx.Response.ContentType = ct.ToString();
+    if (resp.Content.Headers.ContentLength is { } cl)
+        ctx.Response.ContentLength = cl;
+    if (resp.Headers.TryGetValues("Content-Range", out var cr))
+        ctx.Response.Headers.Append("Content-Range", cr.First());
+    ctx.Response.Headers.Append("Accept-Ranges", "bytes");
+
+    await resp.Content.CopyToAsync(ctx.Response.Body, ctx.RequestAborted);
+});
 
 app.Run();

@@ -1,7 +1,228 @@
-﻿@page "/"
+@page "/"
+@using BilibiliApp.Services
+@inject BilibiliService BilibiliService
+@rendermode InteractiveServer
 
-<PageTitle>Home</PageTitle>
+<PageTitle>B站视频工具</PageTitle>
 
-<h1>Hello, world!</h1>
+<div class="container mt-4" style="max-width:720px">
+    <h1 class="mb-1">🎬 B站视频工具</h1>
+    <p class="text-muted mb-4">视频信息查询 · 一键点赞 · 在线音频播放</p>
 
-Welcome to your new app.
+    @* ── Step 1: BV号 ──────────────────────────────────────────── *@
+    <div class="card shadow-sm mb-4">
+        <div class="card-body">
+            <h5 class="card-title">① 输入 BV 号</h5>
+            <div class="input-group">
+                <span class="input-group-text fw-bold">BV</span>
+                <input class="form-control"
+                       @bind="bvid"
+                       @bind:event="oninput"
+                       placeholder="例如：1GJ411n7U"
+                       @onkeydown="OnBvKeyDown" />
+                <button class="btn btn-primary"
+                        @onclick="FetchInfoAsync"
+                        disabled="@(isLoading || string.IsNullOrWhiteSpace(bvid))">
+                    @if (isLoading)
+                    {
+                        <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+                    }
+                    获取视频信息
+                </button>
+            </div>
+            @if (!string.IsNullOrEmpty(fetchError))
+            {
+                <div class="alert alert-danger mt-2 mb-0 py-2">@fetchError</div>
+            }
+        </div>
+    </div>
+
+    @if (videoInfo != null)
+    {
+        @* ── Step 2: 视频信息 ──────────────────────────────────────── *@
+        <div class="card shadow-sm mb-4 border-success">
+            <div class="card-body">
+                <h5 class="card-title">② 视频信息</h5>
+                <p class="mb-1"><strong>标题：</strong>@videoInfo.Title</p>
+                <p class="mb-0"><strong>时长：</strong>@FormatDuration(videoInfo.Duration)
+                    <span class="text-muted small">（共 @videoInfo.Duration 秒）</span>
+                </p>
+            </div>
+        </div>
+
+        @* ── Step 3: 一键点赞 ──────────────────────────────────────── *@
+        <div class="card shadow-sm mb-4">
+            <div class="card-body">
+                <h5 class="card-title">③ 一键点赞</h5>
+                <p class="text-muted small mb-2">
+                    需要您的 B 站 Cookie。打开 bilibili.com → F12 → Application → Cookies，
+                    复制 <code>SESSDATA</code> 和 <code>bili_jct</code> 的值。
+                </p>
+                <div class="row g-2 mb-2">
+                    <div class="col">
+                        <input class="form-control font-monospace"
+                               type="password"
+                               @bind="sessdata"
+                               placeholder="SESSDATA" />
+                    </div>
+                    <div class="col">
+                        <input class="form-control font-monospace"
+                               type="password"
+                               @bind="biliJct"
+                               placeholder="bili_jct" />
+                    </div>
+                </div>
+                <button class="btn btn-success"
+                        @onclick="LikeAsync"
+                        disabled="@(isLiking || string.IsNullOrWhiteSpace(sessdata) || string.IsNullOrWhiteSpace(biliJct))">
+                    @if (isLiking)
+                    {
+                        <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+                    }
+                    👍 点赞
+                </button>
+                @if (!string.IsNullOrEmpty(likeMessage))
+                {
+                    <div class="alert @(likeSuccess ? "alert-success" : "alert-danger") mt-2 mb-0 py-2">
+                        @likeMessage
+                    </div>
+                }
+            </div>
+        </div>
+
+        @* ── Step 4: 在线音频播放 ─────────────────────────────────── *@
+        <div class="card shadow-sm mb-4">
+            <div class="card-body">
+                <h5 class="card-title">④ 在线音频播放</h5>
+                <p class="text-muted small mb-2">
+                    需在服务器上安装 <code>yt-dlp</code>（<code>pip install yt-dlp</code>）。
+                    开始时间留空则从头播放。
+                </p>
+                <div class="input-group mb-3">
+                    <span class="input-group-text">开始时间</span>
+                    <input class="form-control"
+                           @bind="startTime"
+                           placeholder="秒数 / MM:SS / HH:MM:SS" />
+                    <button class="btn btn-primary" @onclick="LoadAudio">
+                        ▶ 加载播放
+                    </button>
+                </div>
+                @if (showAudio)
+                {
+                    <audio class="w-100"
+                           controls
+                           autoplay
+                           @key="audioKey"
+                           src="@audioSrc">
+                        您的浏览器不支持 audio 元素。
+                    </audio>
+                }
+                @if (!string.IsNullOrEmpty(audioError))
+                {
+                    <div class="alert alert-warning mt-2 mb-0 py-2">@audioError</div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    // ── State ────────────────────────────────────────────────────────────────
+    string bvid = "";
+    string sessdata = "";
+    string biliJct = "";
+    string startTime = "";
+    string fetchError = "";
+    string likeMessage = "";
+    string audioError = "";
+    string audioSrc = "";
+    int audioKey = 0;
+    bool isLoading;
+    bool isLiking;
+    bool likeSuccess;
+    bool showAudio;
+    VideoInfo? videoInfo;
+
+    // ── Handlers ─────────────────────────────────────────────────────────────
+    async Task OnBvKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await FetchInfoAsync();
+    }
+
+    async Task FetchInfoAsync()
+    {
+        fetchError = "";
+        videoInfo = null;
+        showAudio = false;
+        audioError = "";
+        isLoading = true;
+        try
+        {
+            videoInfo = await BilibiliService.GetVideoInfoAsync(bvid.Trim());
+            if (videoInfo is null)
+                fetchError = "无法获取视频信息，请确认 BV 号是否正确。";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    async Task LikeAsync()
+    {
+        likeMessage = "";
+        isLiking = true;
+        try
+        {
+            var (success, msg) = await BilibiliService.LikeVideoAsync(
+                bvid.Trim(), sessdata.Trim(), biliJct.Trim());
+            likeSuccess = success;
+            likeMessage = msg;
+        }
+        finally
+        {
+            isLiking = false;
+        }
+    }
+
+    void LoadAudio()
+    {
+        audioError = "";
+        var start = ParseTime(startTime);
+        if (videoInfo is not null && start >= videoInfo.Duration && videoInfo.Duration > 0)
+        {
+            audioError = $"开始时间超过视频时长 {FormatDuration(videoInfo.Duration)}，已重置为 0。";
+            start = 0;
+        }
+        // Use the media fragment URI (#t=N) so the browser requests the stream
+        // starting at the specified offset via HTTP Range.
+        audioSrc = $"/api/audio-stream/{bvid.Trim()}#t={start}";
+        audioKey++;
+        showAudio = true;
+    }
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    static string FormatDuration(int seconds)
+    {
+        var ts = TimeSpan.FromSeconds(Math.Max(0, seconds));
+        return ts.TotalHours >= 1 ? ts.ToString(@"hh\:mm\:ss") : ts.ToString(@"mm\:ss");
+    }
+
+    static int ParseTime(string s)
+    {
+        s = (s ?? "").Trim();
+        if (string.IsNullOrEmpty(s)) return 0;
+        var parts = s.Split(':');
+        try
+        {
+            return parts.Length switch
+            {
+                3 => int.Parse(parts[0]) * 3600 + int.Parse(parts[1]) * 60 + int.Parse(parts[2]),
+                2 => int.Parse(parts[0]) * 60 + int.Parse(parts[1]),
+                _ => int.TryParse(s, out var sec) ? sec : 0,
+            };
+        }
+        catch { return 0; }
+    }
+}
+
