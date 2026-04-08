@@ -1,6 +1,8 @@
 @page "/"
 @using BilibiliApp.Services
 @inject BilibiliService BilibiliService
+@inject UserSession UserSession
+@implements IDisposable
 @rendermode InteractiveServer
 
 <PageTitle>B站视频工具</PageTitle>
@@ -54,38 +56,95 @@
         <div class="card shadow-sm mb-4">
             <div class="card-body">
                 <h5 class="card-title">③ 一键点赞</h5>
-                <p class="text-muted small mb-2">
-                    需要您的 B 站 Cookie。打开 bilibili.com → F12 → Application → Cookies，
-                    复制 <code>SESSDATA</code> 和 <code>bili_jct</code> 的值。
-                </p>
-                <div class="row g-2 mb-2">
-                    <div class="col">
-                        <input class="form-control font-monospace"
-                               type="password"
-                               @bind="sessdata"
-                               placeholder="SESSDATA" />
-                    </div>
-                    <div class="col">
-                        <input class="form-control font-monospace"
-                               type="password"
-                               @bind="biliJct"
-                               placeholder="bili_jct" />
-                    </div>
-                </div>
-                <button class="btn btn-success"
-                        @onclick="LikeAsync"
-                        disabled="@(isLiking || string.IsNullOrWhiteSpace(sessdata) || string.IsNullOrWhiteSpace(biliJct))">
-                    @if (isLiking)
-                    {
-                        <span class="spinner-border spinner-border-sm me-1" role="status"></span>
-                    }
-                    👍 点赞
-                </button>
-                @if (!string.IsNullOrEmpty(likeMessage))
+
+                @* ── Login state bar ────────────────────────────────── *@
+                @if (UserSession.IsLoggedIn)
                 {
-                    <div class="alert @(likeSuccess ? "alert-success" : "alert-danger") mt-2 mb-0 py-2">
-                        @likeMessage
+                    <div class="d-flex align-items-center gap-3 mb-3">
+                        <span class="badge bg-success fs-6">✅ 已登录</span>
+                        @if (!string.IsNullOrEmpty(UserSession.Username))
+                        {
+                            <span class="text-muted">欢迎，<strong>@UserSession.Username</strong></span>
+                        }
+                        <button class="btn btn-outline-secondary btn-sm ms-auto"
+                                @onclick="Logout">退出登录</button>
                     </div>
+                    <button class="btn btn-success"
+                            @onclick="LikeAsync"
+                            disabled="@isLiking">
+                        @if (isLiking)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+                        }
+                        👍 一键点赞
+                    </button>
+                    @if (!string.IsNullOrEmpty(likeMessage))
+                    {
+                        <div class="alert @(likeSuccess ? "alert-success" : "alert-danger") mt-2 mb-0 py-2">
+                            @likeMessage
+                        </div>
+                    }
+                }
+                else
+                {
+                    @* ── QR code login ───────────────────────────────── *@
+                    <p class="text-muted small mb-3">
+                        请用 <strong>哔哩哔哩 APP</strong> 扫描下方二维码登录，无需复制任何 Cookie。
+                    </p>
+
+                    @if (string.IsNullOrEmpty(qrImageBase64) && !isGeneratingQr)
+                    {
+                        <button class="btn btn-primary" @onclick="StartQrLoginAsync">
+                            📱 显示扫码登录二维码
+                        </button>
+                    }
+
+                    @if (isGeneratingQr)
+                    {
+                        <div class="d-flex align-items-center gap-2 text-muted">
+                            <span class="spinner-border spinner-border-sm" role="status"></span>
+                            正在生成二维码…
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrEmpty(qrImageBase64))
+                    {
+                        <div class="text-center">
+                            <img src="data:image/png;base64,@qrImageBase64"
+                                 alt="B站扫码登录"
+                                 style="width:220px;height:220px;image-rendering:pixelated"
+                                 class="border rounded p-1 mb-2" />
+                            <div class="mt-1">
+                                @switch (qrStatus)
+                                {
+                                    case 86101:
+                                        <span class="text-muted small">⏳ 等待扫码…</span>
+                                        break;
+                                    case 86090:
+                                        <span class="text-warning small">📱 已扫码，请在手机上确认授权…</span>
+                                        break;
+                                    case 86038:
+                                        <span class="text-danger small">二维码已过期</span>
+                                        break;
+                                    default:
+                                        <span class="text-muted small">正在连接…</span>
+                                        break;
+                                }
+                            </div>
+                            @if (qrStatus == 86038)
+                            {
+                                <button class="btn btn-outline-primary btn-sm mt-2"
+                                        @onclick="StartQrLoginAsync">
+                                    🔄 重新生成二维码
+                                </button>
+                            }
+                        </div>
+                    }
+
+                    @if (!string.IsNullOrEmpty(qrError))
+                    {
+                        <div class="alert alert-danger mt-2 mb-0 py-2">@qrError</div>
+                    }
                 }
             </div>
         </div>
@@ -129,19 +188,23 @@
 @code {
     // ── State ────────────────────────────────────────────────────────────────
     string bvid = "";
-    string sessdata = "";
-    string biliJct = "";
     string startTime = "";
     string fetchError = "";
     string likeMessage = "";
     string audioError = "";
     string audioSrc = "";
+    string qrImageBase64 = "";
+    string qrKey = "";
+    string qrError = "";
     int audioKey = 0;
+    int qrStatus = 0;
     bool isLoading;
     bool isLiking;
+    bool isGeneratingQr;
     bool likeSuccess;
     bool showAudio;
     VideoInfo? videoInfo;
+    CancellationTokenSource? qrCts;
 
     // ── Handlers ─────────────────────────────────────────────────────────────
     async Task OnBvKeyDown(KeyboardEventArgs e)
@@ -174,8 +237,7 @@
         isLiking = true;
         try
         {
-            var (success, msg) = await BilibiliService.LikeVideoAsync(
-                bvid.Trim(), sessdata.Trim(), biliJct.Trim());
+            var (success, msg) = await BilibiliService.LikeVideoAsync(bvid.Trim(), UserSession);
             likeSuccess = success;
             likeMessage = msg;
         }
@@ -194,12 +256,102 @@
             audioError = $"开始时间超过视频时长 {FormatDuration(videoInfo.Duration)}，已重置为 0。";
             start = 0;
         }
-        // Use the media fragment URI (#t=N) so the browser requests the stream
-        // starting at the specified offset via HTTP Range.
         audioSrc = $"/api/audio-stream/{bvid.Trim()}#t={start}";
         audioKey++;
         showAudio = true;
     }
+
+    // ── QR login ──────────────────────────────────────────────────────────────
+    async Task StartQrLoginAsync()
+    {
+        StopQrPolling();
+        qrImageBase64 = "";
+        qrKey = "";
+        qrError = "";
+        qrStatus = 0;
+        isGeneratingQr = true;
+
+        var result = await BilibiliService.GenerateQrCodeAsync();
+        isGeneratingQr = false;
+
+        if (result is null)
+        {
+            qrError = "二维码生成失败，请稍后重试。";
+            return;
+        }
+
+        qrKey = result.Value.QrKey;
+        qrImageBase64 = result.Value.QrImageBase64;
+        qrStatus = 86101;
+
+        _ = PollQrCodeAsync();
+    }
+
+    async Task PollQrCodeAsync()
+    {
+        qrCts = new CancellationTokenSource();
+        var token = qrCts.Token;
+
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                await Task.Delay(2000, token);
+
+                var poll = await BilibiliService.PollQrLoginAsync(qrKey);
+                qrStatus = poll.Code;
+
+                if (poll.Code == 0)
+                {
+                    // Login succeeded — populate session
+                    UserSession.Sessdata = poll.Sessdata;
+                    UserSession.BiliJct = poll.BiliJct;
+                    UserSession.DedeUserId = poll.DedeUserId;
+                    UserSession.Username = await BilibiliService.GetUsernameAsync(UserSession);
+                    qrImageBase64 = "";
+                    await InvokeAsync(StateHasChanged);
+                    break;
+                }
+
+                if (poll.Code == 86038)
+                {
+                    // Expired — stop polling, let user regenerate
+                    await InvokeAsync(StateHasChanged);
+                    break;
+                }
+
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            await InvokeAsync(() =>
+            {
+                qrError = $"登录轮询异常: {ex.Message}";
+                StateHasChanged();
+            });
+        }
+    }
+
+    void StopQrPolling()
+    {
+        qrCts?.Cancel();
+        qrCts?.Dispose();
+        qrCts = null;
+    }
+
+    void Logout()
+    {
+        StopQrPolling();
+        UserSession.Clear();
+        qrImageBase64 = "";
+        qrKey = "";
+        qrError = "";
+        likeMessage = "";
+    }
+
+    public void Dispose() => StopQrPolling();
 
     // ── Helpers ──────────────────────────────────────────────────────────────
     static string FormatDuration(int seconds)

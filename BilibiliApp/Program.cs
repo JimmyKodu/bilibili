@@ -17,12 +17,24 @@ builder.Services.AddHttpClient<BilibiliService>(client =>
     client.DefaultRequestHeaders.Add("Referer", "https://www.bilibili.com");
 });
 
+// Named HttpClient for auth / QR-code polling — UseCookies=false so that
+// Set-Cookie response headers are accessible for manual parsing.
+builder.Services.AddHttpClient("bilibili-auth", client =>
+{
+    client.DefaultRequestHeaders.Add("User-Agent", UserAgent);
+    client.DefaultRequestHeaders.Add("Referer", "https://www.bilibili.com");
+}).ConfigurePrimaryHttpMessageHandler(
+    () => new HttpClientHandler { UseCookies = false });
+
 // Named HttpClient for proxying audio CDN streams
 builder.Services.AddHttpClient("bilibili-cdn", client =>
 {
     client.DefaultRequestHeaders.Add("User-Agent", UserAgent);
     client.DefaultRequestHeaders.Add("Referer", "https://www.bilibili.com");
 });
+
+// Scoped service: one UserSession per Blazor Server circuit (per connected user)
+builder.Services.AddScoped<UserSession>();
 
 var app = builder.Build();
 
