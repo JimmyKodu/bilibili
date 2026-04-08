@@ -107,50 +107,40 @@
                     @* ── Tab 1: Browser session ───────────────────────── *@
                     @if (loginTab == 1)
                     {
-                        <p class="text-muted small mb-3">
-                            只要您已在<strong>当前浏览器</strong>登录了 B 站，点击下方按钮即可在新窗口中直接点赞，无需任何额外操作。
-                        </p>
-                        <div class="d-flex flex-wrap gap-2 mb-3">
+                        <ol class="mb-3 ps-3 text-secondary small lh-lg">
+                            <li>将下方 <strong>「👍点赞」书签</strong> 拖到浏览器书签栏（仅需一次，适用所有B站视频）</li>
+                            <li>点击「↗ 打开视频页」按钮，等待弹窗中视频页加载完毕</li>
+                            <li>在弹窗中点击书签栏里的「👍点赞」书签 → 自动完成点赞 ✅</li>
+                        </ol>
+                        <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+                            <a class="btn btn-success fw-bold"
+                               href="@GetBookmarkletUrl()"
+                               draggable="true"
+                               title="将此按钮拖到浏览器书签栏，点击即可在任意B站视频页自动点赞">
+                                🔖 👍点赞（拖到书签栏）
+                            </a>
                             <button class="btn btn-warning fw-bold"
                                     @onclick="OpenBiliPopupAsync">
-                                ↗ 打开B站视频页点赞
+                                ↗ 打开视频页
                             </button>
                             <a class="btn btn-outline-secondary"
                                href="https://www.bilibili.com/video/BV@(bvid.Trim())"
                                target="_blank" rel="noopener">
-                                🔗 在新标签页打开
+                                🔗 新标签页打开
                             </a>
                         </div>
-
-                        @* ── Inline iframe attempt ────────────────────── *@
-                        <div class="mb-2">
-                            @if (!showBiliFrame)
-                            {
-                                <button class="btn btn-outline-primary btn-sm"
-                                        @onclick='() => showBiliFrame = true'>
-                                    📺 在页面内嵌入B站视频
-                                </button>
-                                <p class="text-muted small mt-1 mb-0">
-                                    提示：受浏览器同源策略限制，嵌入框架内的登录状态可能与外部不同步。
-                                    推荐使用上方「打开B站视频页点赞」按钮。
-                                </p>
-                            }
-                            else
-                            {
-                                <div class="d-flex justify-content-between align-items-center mb-1">
-                                    <span class="text-muted small">⚠️ 若下方显示未登录，请使用上方弹窗按钮</span>
-                                    <button class="btn btn-outline-secondary btn-sm"
-                                            @onclick='() => showBiliFrame = false'>收起</button>
-                                </div>
-                                <iframe src="https://www.bilibili.com/video/BV@(bvid.Trim())"
-                                        style="width:100%;height:520px;border:1px solid #dee2e6;border-radius:8px"
-                                        title="B站视频页面"
-                                        allowfullscreen
-                                        loading="lazy"
-                                        referrerpolicy="no-referrer-when-downgrade">
-                                </iframe>
-                            }
-                        </div>
+                        @if (browserPageOpened)
+                        {
+                            <div class="alert alert-info py-2 mb-0 small">
+                                ✅ 视频页已打开。请在弹出窗口加载完毕后，点击书签栏中的「👍点赞」书签完成自动点赞。
+                            </div>
+                        }
+                        else
+                        {
+                            <p class="text-muted small mb-0">
+                                💡 书签保存一次即可永久使用，自动识别当前页面的BV号，无需每次更新。
+                            </p>
+                        }
                     }
 
                     @* ── Tab 0: QR code login ─────────────────────────── *@
@@ -273,7 +263,7 @@
     bool isGeneratingQr;
     bool likeSuccess;
     bool showAudio;
-    bool showBiliFrame;
+    bool browserPageOpened;
     VideoInfo? videoInfo;
     CancellationTokenSource? qrCts;
 
@@ -288,7 +278,7 @@
         fetchError = "";
         videoInfo = null;
         showAudio = false;
-        showBiliFrame = false;
+        browserPageOpened = false;
         audioError = "";
         isLoading = true;
         try
@@ -338,6 +328,35 @@
     {
         var url = $"https://www.bilibili.com/video/BV{bvid.Trim()}";
         await JS.InvokeVoidAsync("openBiliPopup", url);
+        browserPageOpened = true;
+    }
+
+    // ── Bookmarklet ───────────────────────────────────────────────────────────
+    /// <summary>
+    /// Returns a universal bookmarklet href that, when clicked on any bilibili.com
+    /// video page, reads bili_jct from the page's own cookies (same-origin) and
+    /// calls the like API — no server involvement needed.
+    /// </summary>
+    static string GetBookmarkletUrl()
+    {
+        // Single-line JS that:
+        //  1. reads bili_jct from document.cookie (same-origin on bilibili.com)
+        //  2. extracts the BV number from the current URL
+        //  3. POSTs to the Bilibili like API with credentials
+        return "javascript:(function(){" +
+            "var j=(document.cookie.match(/bili_jct=([^;]+)/)||[])[1];" +
+            "if(!j){alert('\\u8bf7\\u5148\\u767b\\u5f55B\\u7ad9');return;}" +
+            "var m=location.pathname.match(/\\/BV([A-Za-z0-9]+)/i);" +
+            "if(!m){alert('\\u672a\\u68c0\\u6d4b\\u5230BV\\u53f7\\uff0c\\u8bf7\\u5728B\\u7ad9\\u89c6\\u9891\\u9875\\u4f7f\\u7528');return;}" +
+            "fetch('https://api.bilibili.com/x/web-interface/archive/like',{" +
+            "method:'POST',credentials:'include'," +
+            "headers:{'Content-Type':'application/x-www-form-urlencoded'}," +
+            "body:'bvid=BV'+m[1]+'&like=1&csrf='+j" +
+            "}).then(function(r){return r.json()}).then(function(d){" +
+            "if(d.code===0||d.code===65006)alert('\\u2705 \\u70b9\\u8d5e\\u6210\\u529f\\uff01');" +
+            "else alert('\\u70b9\\u8d5e\\u5931\\u8d25: '+d.message+' ('+d.code+')')" +
+            "}).catch(function(e){alert('\\u8bf7\\u6c42\\u5f02\\u5e38: '+e)});" +
+            "})()";
     }
 
     // ── QR login ──────────────────────────────────────────────────────────────
