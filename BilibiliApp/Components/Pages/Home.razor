@@ -2,6 +2,7 @@
 @using BilibiliApp.Services
 @inject BilibiliService BilibiliService
 @inject UserSession UserSession
+@inject IJSRuntime JS
 @implements IDisposable
 @rendermode InteractiveServer
 
@@ -57,11 +58,11 @@
             <div class="card-body">
                 <h5 class="card-title">③ 一键点赞</h5>
 
-                @* ── Login state bar ────────────────────────────────── *@
+                @* ── If already logged in via QR, skip tabs ──────────── *@
                 @if (UserSession.IsLoggedIn)
                 {
                     <div class="d-flex align-items-center gap-3 mb-3">
-                        <span class="badge bg-success fs-6">✅ 已登录</span>
+                        <span class="badge bg-success fs-6">✅ 已登录（扫码）</span>
                         @if (!string.IsNullOrEmpty(UserSession.Username))
                         {
                             <span class="text-muted">欢迎，<strong>@UserSession.Username</strong></span>
@@ -87,63 +88,131 @@
                 }
                 else
                 {
-                    @* ── QR code login ───────────────────────────────── *@
-                    <p class="text-muted small mb-3">
-                        请用 <strong>哔哩哔哩 APP</strong> 扫描下方二维码登录，无需复制任何 Cookie。
-                    </p>
+                    @* ── Two-tab layout ──────────────────────────────────── *@
+                    <ul class="nav nav-pills mb-3 gap-2">
+                        <li class="nav-item">
+                            <button class="nav-link @(loginTab == 1 ? "active" : "")"
+                                    @onclick='() => loginTab = 1'>
+                                🌐 浏览器直接点赞
+                            </button>
+                        </li>
+                        <li class="nav-item">
+                            <button class="nav-link @(loginTab == 0 ? "active" : "")"
+                                    @onclick='() => loginTab = 0'>
+                                📱 手机扫码登录
+                            </button>
+                        </li>
+                    </ul>
 
-                    @if (string.IsNullOrEmpty(qrImageBase64) && !isGeneratingQr)
+                    @* ── Tab 1: Browser session ───────────────────────── *@
+                    @if (loginTab == 1)
                     {
-                        <button class="btn btn-primary" @onclick="StartQrLoginAsync">
-                            📱 显示扫码登录二维码
-                        </button>
-                    }
-
-                    @if (isGeneratingQr)
-                    {
-                        <div class="d-flex align-items-center gap-2 text-muted">
-                            <span class="spinner-border spinner-border-sm" role="status"></span>
-                            正在生成二维码…
+                        <p class="text-muted small mb-3">
+                            只要您已在<strong>当前浏览器</strong>登录了 B 站，点击下方按钮即可在新窗口中直接点赞，无需任何额外操作。
+                        </p>
+                        <div class="d-flex flex-wrap gap-2 mb-3">
+                            <button class="btn btn-warning fw-bold"
+                                    @onclick="OpenBiliPopupAsync">
+                                ↗ 打开B站视频页点赞
+                            </button>
+                            <a class="btn btn-outline-secondary"
+                               href="https://www.bilibili.com/video/BV@(bvid.Trim())"
+                               target="_blank" rel="noopener">
+                                🔗 在新标签页打开
+                            </a>
                         </div>
-                    }
 
-                    @if (!string.IsNullOrEmpty(qrImageBase64))
-                    {
-                        <div class="text-center">
-                            <img src="data:image/png;base64,@qrImageBase64"
-                                 alt="B站扫码登录"
-                                 style="width:220px;height:220px;image-rendering:pixelated"
-                                 class="border rounded p-1 mb-2" />
-                            <div class="mt-1">
-                                @switch (qrStatus)
-                                {
-                                    case 86101:
-                                        <span class="text-muted small">⏳ 等待扫码…</span>
-                                        break;
-                                    case 86090:
-                                        <span class="text-warning small">📱 已扫码，请在手机上确认授权…</span>
-                                        break;
-                                    case 86038:
-                                        <span class="text-danger small">二维码已过期</span>
-                                        break;
-                                    default:
-                                        <span class="text-muted small">正在连接…</span>
-                                        break;
-                                }
-                            </div>
-                            @if (qrStatus == 86038)
+                        @* ── Inline iframe attempt ────────────────────── *@
+                        <div class="mb-2">
+                            @if (!showBiliFrame)
                             {
-                                <button class="btn btn-outline-primary btn-sm mt-2"
-                                        @onclick="StartQrLoginAsync">
-                                    🔄 重新生成二维码
+                                <button class="btn btn-outline-primary btn-sm"
+                                        @onclick='() => showBiliFrame = true'>
+                                    📺 在页面内嵌入B站视频
                                 </button>
+                                <p class="text-muted small mt-1 mb-0">
+                                    提示：受浏览器同源策略限制，嵌入框架内的登录状态可能与外部不同步。
+                                    推荐使用上方「打开B站视频页点赞」按钮。
+                                </p>
+                            }
+                            else
+                            {
+                                <div class="d-flex justify-content-between align-items-center mb-1">
+                                    <span class="text-muted small">⚠️ 若下方显示未登录，请使用上方弹窗按钮</span>
+                                    <button class="btn btn-outline-secondary btn-sm"
+                                            @onclick='() => showBiliFrame = false'>收起</button>
+                                </div>
+                                <iframe src="https://www.bilibili.com/video/BV@(bvid.Trim())"
+                                        style="width:100%;height:520px;border:1px solid #dee2e6;border-radius:8px"
+                                        title="B站视频页面"
+                                        allowfullscreen
+                                        loading="lazy"
+                                        referrerpolicy="no-referrer-when-downgrade">
+                                </iframe>
                             }
                         </div>
                     }
 
-                    @if (!string.IsNullOrEmpty(qrError))
+                    @* ── Tab 0: QR code login ─────────────────────────── *@
+                    @if (loginTab == 0)
                     {
-                        <div class="alert alert-danger mt-2 mb-0 py-2">@qrError</div>
+                        <p class="text-muted small mb-3">
+                            使用 <strong>哔哩哔哩 APP</strong> 扫描二维码登录，登录后可在本工具内一键点赞。
+                        </p>
+
+                        @if (string.IsNullOrEmpty(qrImageBase64) && !isGeneratingQr)
+                        {
+                            <button class="btn btn-primary" @onclick="StartQrLoginAsync">
+                                📱 显示扫码登录二维码
+                            </button>
+                        }
+
+                        @if (isGeneratingQr)
+                        {
+                            <div class="d-flex align-items-center gap-2 text-muted">
+                                <span class="spinner-border spinner-border-sm" role="status"></span>
+                                正在生成二维码…
+                            </div>
+                        }
+
+                        @if (!string.IsNullOrEmpty(qrImageBase64))
+                        {
+                            <div class="text-center">
+                                <img src="data:image/png;base64,@qrImageBase64"
+                                     alt="B站扫码登录"
+                                     style="width:220px;height:220px;image-rendering:pixelated"
+                                     class="border rounded p-1 mb-2" />
+                                <div class="mt-1">
+                                    @switch (qrStatus)
+                                    {
+                                        case 86101:
+                                            <span class="text-muted small">⏳ 等待扫码…</span>
+                                            break;
+                                        case 86090:
+                                            <span class="text-warning small">📱 已扫码，请在手机上确认授权…</span>
+                                            break;
+                                        case 86038:
+                                            <span class="text-danger small">二维码已过期</span>
+                                            break;
+                                        default:
+                                            <span class="text-muted small">正在连接…</span>
+                                            break;
+                                    }
+                                </div>
+                                @if (qrStatus == 86038)
+                                {
+                                    <button class="btn btn-outline-primary btn-sm mt-2"
+                                            @onclick="StartQrLoginAsync">
+                                        🔄 重新生成二维码
+                                    </button>
+                                }
+                            </div>
+                        }
+
+                        @if (!string.IsNullOrEmpty(qrError))
+                        {
+                            <div class="alert alert-danger mt-2 mb-0 py-2">@qrError</div>
+                        }
                     }
                 }
             </div>
@@ -198,11 +267,13 @@
     string qrError = "";
     int audioKey = 0;
     int qrStatus = 0;
+    int loginTab = 1;   // 1 = browser session (default), 0 = QR code
     bool isLoading;
     bool isLiking;
     bool isGeneratingQr;
     bool likeSuccess;
     bool showAudio;
+    bool showBiliFrame;
     VideoInfo? videoInfo;
     CancellationTokenSource? qrCts;
 
@@ -217,6 +288,7 @@
         fetchError = "";
         videoInfo = null;
         showAudio = false;
+        showBiliFrame = false;
         audioError = "";
         isLoading = true;
         try
@@ -259,6 +331,13 @@
         audioSrc = $"/api/audio-stream/{bvid.Trim()}#t={start}";
         audioKey++;
         showAudio = true;
+    }
+
+    // ── Browser popup ─────────────────────────────────────────────────────────
+    async Task OpenBiliPopupAsync()
+    {
+        var url = $"https://www.bilibili.com/video/BV{bvid.Trim()}";
+        await JS.InvokeVoidAsync("openBiliPopup", url);
     }
 
     // ── QR login ──────────────────────────────────────────────────────────────
