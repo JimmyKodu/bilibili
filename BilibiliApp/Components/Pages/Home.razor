@@ -104,20 +104,31 @@
                         </li>
                     </ul>
 
-                    @* ── Tab 1: Browser session ───────────────────────── *@
+                    @* ── Tab 1: Browser session + Tampermonkey ───────────────────── *@
                     @if (loginTab == 1)
                     {
+                        <div class="alert alert-primary py-2 mb-3 small">
+                            <strong>🛠 原理：</strong>安装 Tampermonkey 插件 + 本站自动点赞脚本，之后每次打开B站视频页（弹窗 / 新标签 / 当前页均可）会<strong>自动点赞</strong>，无需任何额外操作。
+                        </div>
                         <ol class="mb-3 ps-3 text-secondary small lh-lg">
-                            <li>将下方 <strong>「👍点赞」书签</strong> 拖到浏览器书签栏（仅需一次，适用所有B站视频）</li>
-                            <li>点击「↗ 打开视频页」按钮，等待弹窗中视频页加载完毕</li>
-                            <li>在弹窗中点击书签栏里的「👍点赞」书签 → 自动完成点赞 ✅</li>
+                            <li>
+                                在 Edge 浏览器安装
+                                <a href="https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd"
+                                   target="_blank" rel="noopener" class="fw-bold">Tampermonkey 插件</a>
+                                （Edge 扩展商店，免费 → 点「获取」→「添加扩展」）
+                            </li>
+                            <li>
+                                点击下方 <strong>「📥 安装自动点赞脚本」</strong>，在 Tampermonkey 安装页面点击「安装」（仅需一次）
+                            </li>
+                            <li>
+                                之后点击「↗ 打开视频页」或「🔗 新标签页打开」，视频加载完毕后将<strong>自动完成点赞</strong> ✅
+                            </li>
                         </ol>
                         <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
-                            <a class="btn btn-success fw-bold"
-                               href="@GetBookmarkletUrl()"
-                               draggable="true"
-                               title="将此按钮拖到浏览器书签栏，点击即可在任意B站视频页自动点赞">
-                                🔖 👍点赞（拖到书签栏）
+                            <a class="btn btn-primary fw-bold"
+                               href="/js/bilibili-autlike.user.js"
+                               target="_blank">
+                                📥 安装自动点赞脚本
                             </a>
                             <button class="btn btn-warning fw-bold"
                                     @onclick="OpenBiliPopupAsync">
@@ -131,14 +142,14 @@
                         </div>
                         @if (browserPageOpened)
                         {
-                            <div class="alert alert-info py-2 mb-0 small">
-                                ✅ 视频页已打开。请在弹出窗口加载完毕后，点击书签栏中的「👍点赞」书签完成自动点赞。
+                            <div class="alert alert-success py-2 mb-0 small">
+                                ✅ 视频页已打开。若已安装脚本，页面加载完毕后将在约 3 秒内自动完成点赞。
                             </div>
                         }
                         else
                         {
                             <p class="text-muted small mb-0">
-                                💡 书签保存一次即可永久使用，自动识别当前页面的BV号，无需每次更新。
+                                💡 脚本安装一次即可永久使用，自动识别当前页面的BV号，适用所有B站视频页。
                             </p>
                         }
                     }
@@ -329,34 +340,6 @@
         var url = $"https://www.bilibili.com/video/BV{bvid.Trim()}";
         await JS.InvokeVoidAsync("openBiliPopup", url);
         browserPageOpened = true;
-    }
-
-    // ── Bookmarklet ───────────────────────────────────────────────────────────
-    /// <summary>
-    /// Returns a universal bookmarklet href that, when clicked on any bilibili.com
-    /// video page, reads bili_jct from the page's own cookies (same-origin) and
-    /// calls the like API — no server involvement needed.
-    /// </summary>
-    static string GetBookmarkletUrl()
-    {
-        // Single-line JS that:
-        //  1. reads bili_jct from document.cookie (same-origin on bilibili.com)
-        //  2. extracts the BV number from the current URL
-        //  3. POSTs to the Bilibili like API with credentials
-        return "javascript:(function(){" +
-            "var j=(document.cookie.match(/bili_jct=([^;]+)/)||[])[1];" +
-            "if(!j){alert('\\u8bf7\\u5148\\u767b\\u5f55B\\u7ad9');return;}" +
-            "var m=location.pathname.match(/\\/BV([A-Za-z0-9]+)/i);" +
-            "if(!m){alert('\\u672a\\u68c0\\u6d4b\\u5230BV\\u53f7\\uff0c\\u8bf7\\u5728B\\u7ad9\\u89c6\\u9891\\u9875\\u4f7f\\u7528');return;}" +
-            "fetch('https://api.bilibili.com/x/web-interface/archive/like',{" +
-            "method:'POST',credentials:'include'," +
-            "headers:{'Content-Type':'application/x-www-form-urlencoded'}," +
-            "body:'bvid=BV'+m[1]+'&like=1&csrf='+j" +
-            "}).then(function(r){return r.json()}).then(function(d){" +
-            "if(d.code===0||d.code===65006)alert('\\u2705 \\u70b9\\u8d5e\\u6210\\u529f\\uff01');" +
-            "else alert('\\u70b9\\u8d5e\\u5931\\u8d25: '+d.message+' ('+d.code+')')" +
-            "}).catch(function(e){alert('\\u8bf7\\u6c42\\u5f02\\u5e38: '+e)});" +
-            "})()";
     }
 
     // ── QR login ──────────────────────────────────────────────────────────────
