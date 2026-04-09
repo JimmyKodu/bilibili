@@ -1,0 +1,461 @@
+@page "/"
+@using BilibiliApp.Services
+@inject BilibiliService BilibiliService
+@inject UserSession UserSession
+@inject IJSRuntime JS
+@implements IDisposable
+@rendermode InteractiveServer
+
+<PageTitle>B站视频工具</PageTitle>
+
+<div class="container mt-4" style="max-width:720px">
+    <h1 class="mb-1">🎬 B站视频工具</h1>
+    <p class="text-muted mb-4">视频信息查询 · 一键点赞 · 在线音频播放</p>
+
+    @* ── Step 1: BV号 ──────────────────────────────────────────── *@
+    <div class="card shadow-sm mb-4">
+        <div class="card-body">
+            <h5 class="card-title">① 输入 BV 号</h5>
+            <div class="input-group">
+                <span class="input-group-text fw-bold">BV</span>
+                <input class="form-control"
+                       @bind="bvid"
+                       @bind:event="oninput"
+                       placeholder="例如：1GJ411n7U"
+                       @onkeydown="OnBvKeyDown" />
+                <button class="btn btn-primary"
+                        @onclick="FetchInfoAsync"
+                        disabled="@(isLoading || string.IsNullOrWhiteSpace(bvid))">
+                    @if (isLoading)
+                    {
+                        <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+                    }
+                    获取视频信息
+                </button>
+            </div>
+            @if (!string.IsNullOrEmpty(fetchError))
+            {
+                <div class="alert alert-danger mt-2 mb-0 py-2">@fetchError</div>
+            }
+        </div>
+    </div>
+
+    @if (videoInfo != null)
+    {
+        @* ── Step 2: 视频信息 ──────────────────────────────────────── *@
+        <div class="card shadow-sm mb-4 border-success">
+            <div class="card-body">
+                <h5 class="card-title">② 视频信息</h5>
+                <p class="mb-1"><strong>标题：</strong>@videoInfo.Title</p>
+                <p class="mb-0"><strong>时长：</strong>@FormatDuration(videoInfo.Duration)
+                    <span class="text-muted small">（共 @videoInfo.Duration 秒）</span>
+                </p>
+            </div>
+        </div>
+
+        @* ── Step 3: 一键点赞 ──────────────────────────────────────── *@
+        <div class="card shadow-sm mb-4">
+            <div class="card-body">
+                <h5 class="card-title">③ 一键点赞</h5>
+
+                @* ── If already logged in via QR, skip tabs ──────────── *@
+                @if (UserSession.IsLoggedIn)
+                {
+                    <div class="d-flex align-items-center gap-3 mb-3">
+                        <span class="badge bg-success fs-6">✅ 已登录（扫码）</span>
+                        @if (!string.IsNullOrEmpty(UserSession.Username))
+                        {
+                            <span class="text-muted">欢迎，<strong>@UserSession.Username</strong></span>
+                        }
+                        <button class="btn btn-outline-secondary btn-sm ms-auto"
+                                @onclick="Logout">退出登录</button>
+                    </div>
+                    <button class="btn btn-success"
+                            @onclick="LikeAsync"
+                            disabled="@isLiking">
+                        @if (isLiking)
+                        {
+                            <span class="spinner-border spinner-border-sm me-1" role="status"></span>
+                        }
+                        👍 一键点赞
+                    </button>
+                    @if (!string.IsNullOrEmpty(likeMessage))
+                    {
+                        <div class="alert @(likeSuccess ? "alert-success" : "alert-danger") mt-2 mb-0 py-2">
+                            @likeMessage
+                        </div>
+                    }
+                }
+                else
+                {
+                    @* ── Two-tab layout ──────────────────────────────────── *@
+                    <ul class="nav nav-pills mb-3 gap-2">
+                        <li class="nav-item">
+                            <button class="nav-link @(loginTab == 1 ? "active" : "")"
+                                    @onclick='() => loginTab = 1'>
+                                🌐 浏览器直接点赞
+                            </button>
+                        </li>
+                        <li class="nav-item">
+                            <button class="nav-link @(loginTab == 0 ? "active" : "")"
+                                    @onclick='() => loginTab = 0'>
+                                📱 手机扫码登录
+                            </button>
+                        </li>
+                    </ul>
+
+                    @* ── Tab 1: Browser session + Tampermonkey ───────────────────── *@
+                    @if (loginTab == 1)
+                    {
+                        <div class="alert alert-primary py-2 mb-3 small">
+                            <strong>🛠 原理：</strong>安装 Tampermonkey 插件 + 本站自动点赞脚本，之后每次打开B站视频页（弹窗 / 新标签 / 当前页均可）会<strong>自动点赞</strong>，无需任何额外操作。
+                        </div>
+                        <ol class="mb-3 ps-3 text-secondary small lh-lg">
+                            <li>
+                                在 Edge 浏览器安装
+                                <a href="https://microsoftedge.microsoft.com/addons/detail/tampermonkey/iikmkjmpaadaobahmlepeloendndfphd"
+                                   target="_blank" rel="noopener" class="fw-bold">Tampermonkey 插件</a>
+                                （Edge 扩展商店，免费 → 点「获取」→「添加扩展」）
+                            </li>
+                            <li>
+                                点击下方 <strong>「📥 安装自动点赞脚本」</strong>，在 Tampermonkey 安装页面点击「安装」（仅需一次）
+                            </li>
+                            <li>
+                                之后点击「↗ 打开视频页」或「🔗 新标签页打开」，视频加载完毕后将<strong>自动完成点赞</strong> ✅
+                            </li>
+                        </ol>
+                        <div class="d-flex flex-wrap gap-2 align-items-center mb-2">
+                            <a class="btn btn-primary fw-bold"
+                               href="/js/bilibili-autlike.user.js"
+                               target="_blank">
+                                📥 安装自动点赞脚本
+                            </a>
+                            <button class="btn btn-warning fw-bold"
+                                    @onclick="OpenBiliPopupAsync">
+                                ↗ 打开视频页
+                            </button>
+                            <a class="btn btn-outline-secondary"
+                               href="https://www.bilibili.com/video/BV@(bvid.Trim())"
+                               target="_blank" rel="noopener">
+                                🔗 新标签页打开
+                            </a>
+                        </div>
+                        @if (browserPageOpened)
+                        {
+                            <div class="alert alert-success py-2 mb-0 small">
+                                ✅ 视频页已打开。若已安装脚本，页面加载完毕后将在约 3 秒内自动完成点赞。
+                            </div>
+                        }
+                        else
+                        {
+                            <p class="text-muted small mb-0">
+                                💡 脚本安装一次即可永久使用，自动识别当前页面的BV号，适用所有B站视频页。
+                            </p>
+                        }
+                    }
+
+                    @* ── Tab 0: QR code login ─────────────────────────── *@
+                    @if (loginTab == 0)
+                    {
+                        <p class="text-muted small mb-3">
+                            使用 <strong>哔哩哔哩 APP</strong> 扫描二维码登录，登录后可在本工具内一键点赞。
+                        </p>
+
+                        @if (string.IsNullOrEmpty(qrImageBase64) && !isGeneratingQr)
+                        {
+                            <button class="btn btn-primary" @onclick="StartQrLoginAsync">
+                                📱 显示扫码登录二维码
+                            </button>
+                        }
+
+                        @if (isGeneratingQr)
+                        {
+                            <div class="d-flex align-items-center gap-2 text-muted">
+                                <span class="spinner-border spinner-border-sm" role="status"></span>
+                                正在生成二维码…
+                            </div>
+                        }
+
+                        @if (!string.IsNullOrEmpty(qrImageBase64))
+                        {
+                            <div class="text-center">
+                                <img src="data:image/png;base64,@qrImageBase64"
+                                     alt="B站扫码登录"
+                                     style="width:220px;height:220px;image-rendering:pixelated"
+                                     class="border rounded p-1 mb-2" />
+                                <div class="mt-1">
+                                    @switch (qrStatus)
+                                    {
+                                        case 86101:
+                                            <span class="text-muted small">⏳ 等待扫码…</span>
+                                            break;
+                                        case 86090:
+                                            <span class="text-warning small">📱 已扫码，请在手机上确认授权…</span>
+                                            break;
+                                        case 86038:
+                                            <span class="text-danger small">二维码已过期</span>
+                                            break;
+                                        default:
+                                            <span class="text-muted small">正在连接…</span>
+                                            break;
+                                    }
+                                </div>
+                                @if (qrStatus == 86038)
+                                {
+                                    <button class="btn btn-outline-primary btn-sm mt-2"
+                                            @onclick="StartQrLoginAsync">
+                                        🔄 重新生成二维码
+                                    </button>
+                                }
+                            </div>
+                        }
+
+                        @if (!string.IsNullOrEmpty(qrError))
+                        {
+                            <div class="alert alert-danger mt-2 mb-0 py-2">@qrError</div>
+                        }
+                    }
+                }
+            </div>
+        </div>
+
+        @* ── Step 4: 在线音频播放 ─────────────────────────────────── *@
+        <div class="card shadow-sm mb-4">
+            <div class="card-body">
+                <h5 class="card-title">④ 在线音频播放</h5>
+                <p class="text-muted small mb-2">
+                    需在服务器上安装 <code>yt-dlp</code>（<code>pip install yt-dlp</code>）。
+                    开始时间留空则从头播放。
+                </p>
+                <div class="input-group mb-3">
+                    <span class="input-group-text">开始时间</span>
+                    <input class="form-control"
+                           @bind="startTime"
+                           placeholder="秒数 / MM:SS / HH:MM:SS" />
+                    <button class="btn btn-primary" @onclick="LoadAudio">
+                        ▶ 加载播放
+                    </button>
+                </div>
+                @if (showAudio)
+                {
+                    <audio class="w-100"
+                           controls
+                           autoplay
+                           @key="audioKey"
+                           src="@audioSrc">
+                        您的浏览器不支持 audio 元素。
+                    </audio>
+                }
+                @if (!string.IsNullOrEmpty(audioError))
+                {
+                    <div class="alert alert-warning mt-2 mb-0 py-2">@audioError</div>
+                }
+            </div>
+        </div>
+    }
+</div>
+
+@code {
+    // ── State ────────────────────────────────────────────────────────────────
+    string bvid = "";
+    string startTime = "";
+    string fetchError = "";
+    string likeMessage = "";
+    string audioError = "";
+    string audioSrc = "";
+    string qrImageBase64 = "";
+    string qrKey = "";
+    string qrError = "";
+    int audioKey = 0;
+    int qrStatus = 0;
+    int loginTab = 1;   // 1 = browser session (default), 0 = QR code
+    bool isLoading;
+    bool isLiking;
+    bool isGeneratingQr;
+    bool likeSuccess;
+    bool showAudio;
+    bool browserPageOpened;
+    VideoInfo? videoInfo;
+    CancellationTokenSource? qrCts;
+
+    // ── Handlers ─────────────────────────────────────────────────────────────
+    async Task OnBvKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await FetchInfoAsync();
+    }
+
+    async Task FetchInfoAsync()
+    {
+        fetchError = "";
+        videoInfo = null;
+        showAudio = false;
+        browserPageOpened = false;
+        audioError = "";
+        isLoading = true;
+        try
+        {
+            videoInfo = await BilibiliService.GetVideoInfoAsync(bvid.Trim());
+            if (videoInfo is null)
+                fetchError = "无法获取视频信息，请确认 BV 号是否正确。";
+        }
+        finally
+        {
+            isLoading = false;
+        }
+    }
+
+    async Task LikeAsync()
+    {
+        likeMessage = "";
+        isLiking = true;
+        try
+        {
+            var (success, msg) = await BilibiliService.LikeVideoAsync(bvid.Trim(), UserSession);
+            likeSuccess = success;
+            likeMessage = msg;
+        }
+        finally
+        {
+            isLiking = false;
+        }
+    }
+
+    void LoadAudio()
+    {
+        audioError = "";
+        var start = ParseTime(startTime);
+        if (videoInfo is not null && start >= videoInfo.Duration && videoInfo.Duration > 0)
+        {
+            audioError = $"开始时间超过视频时长 {FormatDuration(videoInfo.Duration)}，已重置为 0。";
+            start = 0;
+        }
+        audioSrc = $"/api/audio-stream/{bvid.Trim()}#t={start}";
+        audioKey++;
+        showAudio = true;
+    }
+
+    // ── Browser popup ─────────────────────────────────────────────────────────
+    async Task OpenBiliPopupAsync()
+    {
+        var url = $"https://www.bilibili.com/video/BV{bvid.Trim()}";
+        await JS.InvokeVoidAsync("openBiliPopup", url);
+        browserPageOpened = true;
+    }
+
+    // ── QR login ──────────────────────────────────────────────────────────────
+    async Task StartQrLoginAsync()
+    {
+        StopQrPolling();
+        qrImageBase64 = "";
+        qrKey = "";
+        qrError = "";
+        qrStatus = 0;
+        isGeneratingQr = true;
+
+        var result = await BilibiliService.GenerateQrCodeAsync();
+        isGeneratingQr = false;
+
+        if (result is null)
+        {
+            qrError = "二维码生成失败，请稍后重试。";
+            return;
+        }
+
+        qrKey = result.Value.QrKey;
+        qrImageBase64 = result.Value.QrImageBase64;
+        qrStatus = 86101;
+
+        _ = PollQrCodeAsync();
+    }
+
+    async Task PollQrCodeAsync()
+    {
+        qrCts = new CancellationTokenSource();
+        var token = qrCts.Token;
+
+        try
+        {
+            while (!token.IsCancellationRequested)
+            {
+                await Task.Delay(2000, token);
+
+                var poll = await BilibiliService.PollQrLoginAsync(qrKey);
+                qrStatus = poll.Code;
+
+                if (poll.Code == 0)
+                {
+                    // Login succeeded — populate session
+                    UserSession.Sessdata = poll.Sessdata;
+                    UserSession.BiliJct = poll.BiliJct;
+                    UserSession.DedeUserId = poll.DedeUserId;
+                    UserSession.Username = await BilibiliService.GetUsernameAsync(UserSession);
+                    qrImageBase64 = "";
+                    await InvokeAsync(StateHasChanged);
+                    break;
+                }
+
+                if (poll.Code == 86038)
+                {
+                    // Expired — stop polling, let user regenerate
+                    await InvokeAsync(StateHasChanged);
+                    break;
+                }
+
+                await InvokeAsync(StateHasChanged);
+            }
+        }
+        catch (OperationCanceledException) { }
+        catch (Exception ex)
+        {
+            await InvokeAsync(() =>
+            {
+                qrError = $"登录轮询异常: {ex.Message}";
+                StateHasChanged();
+            });
+        }
+    }
+
+    void StopQrPolling()
+    {
+        qrCts?.Cancel();
+        qrCts?.Dispose();
+        qrCts = null;
+    }
+
+    void Logout()
+    {
+        StopQrPolling();
+        UserSession.Clear();
+        qrImageBase64 = "";
+        qrKey = "";
+        qrError = "";
+        likeMessage = "";
+    }
+
+    public void Dispose() => StopQrPolling();
+
+    // ── Helpers ──────────────────────────────────────────────────────────────
+    static string FormatDuration(int seconds)
+    {
+        var ts = TimeSpan.FromSeconds(Math.Max(0, seconds));
+        return ts.TotalHours >= 1 ? ts.ToString(@"hh\:mm\:ss") : ts.ToString(@"mm\:ss");
+    }
+
+    static int ParseTime(string s)
+    {
+        s = (s ?? "").Trim();
+        if (string.IsNullOrEmpty(s)) return 0;
+        var parts = s.Split(':');
+        try
+        {
+            return parts.Length switch
+            {
+                3 => int.Parse(parts[0]) * 3600 + int.Parse(parts[1]) * 60 + int.Parse(parts[2]),
+                2 => int.Parse(parts[0]) * 60 + int.Parse(parts[1]),
+                _ => int.TryParse(s, out var sec) ? sec : 0,
+            };
+        }
+        catch { return 0; }
+    }
+}
+
